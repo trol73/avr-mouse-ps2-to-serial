@@ -15,6 +15,9 @@
 #include "debug.h"
 #include "stddef.h"
 
+#define ENABLE_WHEEL					0
+#define PS2_SAMPLES_PER_SEC		40	// 10..200
+
 
 #define EEPROM_OFFSET_MULTIPLIER		0
 
@@ -26,7 +29,7 @@
 // PS/2 порт
 //===========================================================================
 
-#define PS2_BUF_SIZE 16  // Размер приёмного буфера PS/2 порта
+#define PS2_BUF_SIZE 256  // Размер приёмного буфера PS/2 порта
 
 #define PS2_CLK_PORT  D // Ножка к которой подлючен тактовый сиг. PS/2
 #define PS2_CLK_PIN   2
@@ -59,11 +62,10 @@ void ps2_rx_push(uint8_t c) {
 	// Если буфер переполнен и потерян байт, то программа не сможет правильно 
 	// расшифровать все дальнейшие пакеты, поэтому перезагружаем контроллер.
 	if (ps2_rx_buf_count >= sizeof(ps2_rx_buf)) {
-MSG("ERR-rx-push");
 		ps2_state = ps2_state_error;
 		return;
 	}
-	// Сохрраняем в буфер
+	// Сохраняем в буфер
 	ps2_rx_buf[ps2_rx_buf_w] = c;
 	ps2_rx_buf_count++;
 	if (++ps2_rx_buf_w == sizeof(ps2_rx_buf)) {
@@ -77,7 +79,7 @@ MSG("ERR-rx-push");
 uint8_t ps2_aread(void) {
 	uint8_t d;
 	
-	cli();	// Выключаем прерывания, так как обработчик прерывания то же модифицирует эти переменные.
+	cli();	// Выключаем прерывания, так как обработчик прерывания тоже модифицирует эти переменные.
 	// Если буфер пуст, возвращаем ноль
 	if (ps2_rx_buf_count == 0) {
 		d = 0;
@@ -94,14 +96,9 @@ uint8_t ps2_aread(void) {
     return d;
 }
 
-//---------------------------------------------------------------------------
-//проверка, буфер мыши пустой?
-uint8_t ps2_ready(void) {
-	return ps2_rx_buf_count;
-}
 
 //---------------------------------------------------------------------------
-// Вычисление бита чернсоти
+// Вычисление бита чётнсоти
 uint8_t parity(uint8_t p) {
 	p = p ^ (p >> 4 | p << 4);
 	p = p ^ (p >> 2);
@@ -113,7 +110,7 @@ uint8_t parity(uint8_t p) {
 // Изменение тактового сигнала PS/2
 ISR (INT0_vect) {
 	if (ps2_state == ps2_state_error) {
-MSG("e");		
+//MSG("e");		
 		return;
 	}
 //MSG("?");
@@ -133,18 +130,13 @@ MSG("e");
             case 3: // Бит четности
 //					if (ps2_parity ^ 1) {
 //						DDR(PS2_DATA_PORT) |= _BV(PS2_DATA_PIN);
-//						MSG("p0");
 //					} else {
 //						DDR(PS2_DATA_PORT) &= ~_BV(PS2_DATA_PIN);
-//						MSG("p1");
 //					}
-//					MSG_DEC("P=", ps2_parity);
 					if (ps2_parity) {
 						DDR(PS2_DATA_PORT) &= ~_BV(PS2_DATA_PIN);
-//						MSG("p1");
 					} else {
 						DDR(PS2_DATA_PORT) |= _BV(PS2_DATA_PIN);
-//						MSG("p0");
 					}
 					break;
             case 2: // Стоп бит
@@ -165,21 +157,17 @@ MSG("e");
             case 11: // Старт бит
                 if (ps2_data()) {
 						 ps2_state = ps2_state_error;
-MSG("ERR-rx-i0-3"); 
 					 }
                 break;
             default: // Данные
                 ps2_data >>= 1;
                 if (ps2_data()) {
 						 ps2_data |= 0x80;
-//MSG("i1");						 
 					 }
-//else MSG("i0");
                 break;
             case 2: // Бит четности 
                 if (parity(ps2_data) != (ps2_data() != 0)) {
 						 ps2_state = ps2_state_error;
-MSG("ERR-rx-i0-4");
 					 }
                 break;
             case 1: // Стоп бит 
@@ -187,7 +175,6 @@ MSG("ERR-rx-i0-4");
 						 ps2_rx_push(ps2_data);
 					 } else {
 						 ps2_state = ps2_state_error;
-MSG("ERR-rx-i0-5");
 					 }
                 ps2_bitcount = 12;
         }
@@ -251,8 +238,8 @@ void ps2_write(uint8_t a) {
     ps2_parity = parity(a);
 
     // Включаем прерывание по срезу тактового сигнала PS/2
-    GIFR = _BV(INTF0);	//0x40;
-    GICR |= _BV(INT0);//0x40;
+    GIFR = _BV(INTF0);
+    GICR |= _BV(INT0);
     MCUCR = (MCUCR & 0xFC) | 2;    
 }
 
@@ -270,7 +257,7 @@ void ps2_send(uint8_t c) {
 	ps2_write(c);
 	if (ps2_recv() != 0xFA) {
 		ps2_state = ps2_state_error;
-MSG("ERR-send");
+//MSG("ERR-send");
 	}
 }
 
@@ -278,12 +265,12 @@ MSG("ERR-send");
 // RS232 порт
 //===========================================================================
 
-#define RS232_TX_BUFFER_SIZE 16
+#define RS232_TX_BUFFER_SIZE 512
 
 uint8_t rs232_tx_buf[RS232_TX_BUFFER_SIZE];
-uint8_t rs232_tx_buf_w;
-uint8_t rs232_tx_buf_r;
-uint8_t rs232_tx_buf_count;
+volatile uint8_t rs232_tx_buf_w;
+volatile uint8_t rs232_tx_buf_r;
+volatile uint8_t rs232_tx_buf_count;
 volatile bool rs232_reset;
 volatile bool rs232_enabled;
 
@@ -295,7 +282,7 @@ void rs232_send(uint8_t c) {
     cli();
 
     // Если передача уже идёт или в буфере передачи что-то есть, то сохраняем в буфер значение
-    if (rs232_tx_buf_count || ((UCSRA & (1 << UDRE)) == 0)) {
+    if (rs232_tx_buf_count || ((UCSRA & _BV(UDRE)) == 0)) {
         rs232_tx_buf[rs232_tx_buf_w] = c;
         if (++rs232_tx_buf_w == sizeof(rs232_tx_buf)) {
 			  rs232_tx_buf_w = 0;
@@ -319,13 +306,15 @@ ISR (USART_TXC_vect) {
 	 }
 
     // Иначе отправляем байт из буфера
-    --rs232_tx_buf_count;
     UDR = rs232_tx_buf[rs232_tx_buf_r];
-    if(++rs232_tx_buf_r == sizeof(rs232_tx_buf)) rs232_tx_buf_r = 0;
+    rs232_tx_buf_count--;
+    if (++rs232_tx_buf_r == sizeof(rs232_tx_buf)) {
+		 rs232_tx_buf_r = 0;
+	 }
 }
 
 //---------------------------------------------------------------------------
-// Измененилось состояние линий DTR или RTS
+// Изменилось состояние линий DTR или RTS
 ISR (INT1_vect) {
 	// Сохраняем состояние в переменную
 	//rs232_enabled = get_com_power() ? 0 : 1;
@@ -335,7 +324,7 @@ ISR (INT1_vect) {
 }
 
 //===========================================================================
-// Наплатный светодиод
+//  Светодиод
 //===========================================================================
 
 
@@ -357,7 +346,9 @@ ISR (TIMER2_OVF_vect) {
 // Инициализация PS/2 мыши
 //===========================================================================
 
+#if ENABLE_WHEEL
 bool  ps2m_whell;   // Используемый протокол: 0=без колеса, 1=с колесом
+#endif
 uint8_t  ps2m_multiplier; // Масштабирование координат
 uint8_t  ps2m_b;          // Нажатые кнопки
 int16_t  ps2m_x, ps2m_y, ps2m_z; // Координаты
@@ -376,6 +367,8 @@ void ps2m_init() {
 		ps2_state = ps2_state_error; 
 		return; 
 	}
+	
+#if ENABLE_WHEEL
 	// Включаем колесо и побочно устаналвиаем 80 пакетов в секунду.    
 	ps2_send(0xF3);
 	ps2_send(0xC8);
@@ -384,9 +377,10 @@ void ps2m_init() {
 	ps2_send(0xF3);
 	ps2_send(0x50);
 
-	// Узнаем, получилось ли включить колесо
+	// Узнаём, получилось ли включить колесо
 	ps2_send(0xF2);
 	ps2m_whell = ps2_recv();
+#endif
 
 	// Разрешение 8 точек на мм
 	ps2_send(0xE8);
@@ -394,7 +388,7 @@ void ps2m_init() {
 
 	// 20 значений в сек (мышь игнорирует эту команду)
 	ps2_send(0xF3);
-	ps2_send(20);
+	ps2_send(PS2_SAMPLES_PER_SEC);
 
 	// Включаем потоковый режим.
 	ps2_send(0xF4);
@@ -404,7 +398,10 @@ void ps2m_init() {
 // Обработка поступивших с PS/2 порта данных
 
 void ps2m_process() {
-	while (ps2_ready() >= (3 + (ps2m_whell ? 1 : 0))) {
+#if ENABLE_WHEEL
+//	while (ps2_rx_buf_count < (3 + (ps2m_whell ? 1 : 0))) {
+//	}
+	while (ps2_rx_buf_count >= (3 + (ps2m_whell ? 1 : 0))) {
 		ps2m_b = ps2_aread() & 7; //! Тут старшие биты!!!
 		ps2m_x += (int8_t)ps2_aread();
 		ps2m_y -= (int8_t)ps2_aread();
@@ -412,6 +409,16 @@ void ps2m_process() {
 			ps2m_z += (int8_t)ps2_aread();
 		}
 	}
+#else
+	
+	//while (ps2_rx_buf_count < 3) {
+	//}
+	while (ps2_rx_buf_count >= 3) {
+		ps2m_b = ps2_aread() & 7; //! Тут старшие биты!!!
+		ps2m_x += (int8_t)ps2_aread();
+		ps2m_y -= (int8_t)ps2_aread();
+	}	
+#endif
 }          
 
 //===========================================================================
@@ -467,9 +474,9 @@ void rs232m_init() {
     // Протокол определяется перемычкой на плате
     rs232m_protocol = get_jumper() ? PROTOCOL_MICROSOFT : PROTOCOL_EM84520;	// 0x80
 
-    // Настройка RS232: 1200 бод, 1/2 стоп бита, 7 бит, нет четсноти
+    // Настройка RS232: 1200 бод, 1 стоп бит, 7 бит, нет чётности
     UCSRA = 0;
-    UCSRB = 0x48;
+    UCSRB = _BV(TXEN) | _BV(TXCIE);	// 0x48
 	 // В режиме MS регистр USBS = 0 (1 стоп-бит), в режиме EM84520 - 2 стоп-бита
     UCSRC = rs232m_protocol == PROTOCOL_EM84520 ? (_BV(URSEL)|_BV(USBS)|_BV(UCSZ1)) : (_BV(URSEL)|_BV(UCSZ1));//0x8C : 0x84;
     
@@ -477,25 +484,31 @@ void rs232m_init() {
     UBRRL = 0x40;	//0xFF;
     
     // По умолчанию включен
-    rs232_enabled = true;
+    //rs232_enabled = true;
 
     // Вывести приветствие
-    rs232_reset = true;    
+    //rs232_reset = true;    
+	 
+	 rs232_enabled = !get_com_power();
+	 if (rs232_enabled) {
+		rs232_reset = true; 
+	 }
+
 }
 
 //---------------------------------------------------------------------------
 
 void rs232m_send(int8_t x, int8_t y, int8_t z, uint8_t b) {
-    uint8_t i, lb, rb, mb;
+    uint8_t lb, rb, mb;
     static uint8_t mb1;
     
     // Обработка сброса      
     if (rs232_reset) {
-        rs232_reset = 0; 
+        rs232_reset = false; 
         _delay_ms(14);
         if (rs232m_protocol == PROTOCOL_EM84520) {
             // Приветствие EM84520
-            for (i=0; i < sizeof(EM84520_ID); i++) {
+            for (uint8_t i = 0; i < sizeof(EM84520_ID); i++) {
                 rs232_send(EM84520_ID[i]);
 				}
         } else {
@@ -551,16 +564,14 @@ void init(void) {
 
     // Таймер 2
     ASSR = 0; 
-//	 TCCR2 = 7; 
 	 TCCR2 = _BV(CS22)|_BV(CS21)|_BV(CS20);	// CLK/1024
 	 TCNT2 = 0; 
 	 OCR2 = 0;
 
     // Включение прерывания по изменению на входе INT1
-    GICR |= _BV(INT1);	//0x80; 
-	 //MCUCR = 0x04; 
-	 MCUCR = _BV(ISC10);	//0x04; Any logical change on INT1 generates an interrupt request.
-	 GIFR = _BV(INTF1);	//0x80;
+    GICR |= _BV(INT1);
+	 MCUCR = _BV(ISC10);	// Any logical change on INT1 generates an interrupt request.
+	 GIFR = _BV(INTF1);
 
     // Timer(s)/Counter(s) Interrupt(s) initialization
     TIMSK = 0; 
@@ -571,7 +582,7 @@ void init(void) {
     // Analog Comparator initialization
     // Analog Comparator: Off
     // Analog Comparator Input Capture by Timer/Counter 1: Off
-	 ACSR = _BV(ACD);	//0x80;
+	 ACSR = _BV(ACD);
     SFIOR = 0;
 
     // Настройка Watchdog-таймера
@@ -613,26 +624,12 @@ void main(void) {
 		// читаем данные из PS/2
 		ps2m_process();
         
-		// Регулирование скорости мыши прямо с мыши
-		if (rs232m_protocol == PROTOCOL_MICROSOFT && (ps2m_b & 3) == 3) {
-			if (ps2m_z < 0) { 
-				if(ps2m_multiplier > 0) {
-					ps2m_multiplier--; 
-				}
-				ps2m_z = 0; 
-			} else if(ps2m_z > 0) { 
-				if (ps2m_multiplier < 2) {
-					ps2m_multiplier++;
-				}
-				ps2m_z = 0; 
-			}
-		}
         
-		// Отправляем копьютеру пакет, если буфер отпрваки пуст, мышь включена, 
+		// Отправляем копьютеру пакет, если буфер отправки пуст, мышь включена, 
 		// изменились нажатые кнопки или положение мыши
 		if (rs232_enabled) {
 			if (ps2m_b != mb1 || ps2m_x != 0 || ps2m_y != 0 || ps2m_z != 0 || rs232_reset) {
-				if (rs232_tx_buf_count == 0) {
+//				if (rs232_tx_buf_count == 0) {
 					int8_t cx = ps2m_x < -128 ? -128 : (ps2m_x > 127 ? 127 : ps2m_x); 
 					ps2m_x -= cx;
 					int8_t cy = ps2m_y < -128 ? -128 : (ps2m_y > 127 ? 127 : ps2m_y); 
@@ -643,11 +640,10 @@ void main(void) {
 					mb1 = ps2m_b;
 					rs232m_send(cx, cy, cz, ps2m_b);
 					flash_led();
-//				} else {
-					//flash_led();
-				}
 			}
 		}
+		
+
 		// Обработка наплатных кнопок
 		if (pressed_button != 0xFF) {
 			ps2m_multiplier = pressed_button;
@@ -655,10 +651,28 @@ void main(void) {
 			//flash_led();
 			pressed_button = 0xFF;
 		}
+		
+		// Регулирование скорости мыши прямо с мыши
+		if (rs232m_protocol == PROTOCOL_MICROSOFT && (ps2m_b & 3) == 3) {
+			if (ps2m_z < 0) { 
+				if (ps2m_multiplier > 0) {
+					ps2m_multiplier--; 
+				}
+				ps2m_z = 0; 
+			} else if (ps2m_z > 0) { 
+				if (ps2m_multiplier < 2) {
+					ps2m_multiplier++;
+				}
+				ps2m_z = 0; 
+			}
+		}
+
                    
 		// В случае ошибки перезагружаемся
 		if (ps2_state != ps2_state_error) {
 			wdt_reset();
 		}
+ 
+ 
 	}
 }
