@@ -50,7 +50,7 @@ volatile uint8_t ps2_state;                // состояние порта (ps_
 volatile uint8_t ps2_bitcount;             // счётчик битов обработчика
 volatile uint8_t ps2_data;                 // буфер на байт
 volatile uint8_t ps2_parity;
-volatile uint8_t ps2_rx_buf[PS2_BUF_SIZE]; // Приемный буфер PS/2 порта
+volatile uint8_t ps2_rx_buf[PS2_BUF_SIZE]; // Приёмный буфер PS/2 порта
 volatile uint8_t ps2_rx_buf_w;
 volatile uint8_t ps2_rx_buf_r;
 volatile uint8_t ps2_rx_buf_count;
@@ -98,7 +98,7 @@ uint8_t ps2_aread(void) {
 
 
 //---------------------------------------------------------------------------
-// Вычисление бита чётнсоти
+// Вычисление бита чётности
 uint8_t parity(uint8_t p) {
 	p = p ^ (p >> 4 | p << 4);
 	p = p ^ (p >> 2);
@@ -127,7 +127,7 @@ ISR (INT0_vect) {
 					}
 					ps2_data >>= 1;
 					break;
-            case 3: // Бит четности
+            case 3: // Бит чётности
 //					if (ps2_parity ^ 1) {
 //						DDR(PS2_DATA_PORT) |= _BV(PS2_DATA_PIN);
 //					} else {
@@ -195,13 +195,13 @@ void ps2_init(void) {
 	ps2_rx_buf_r = 0;
 	ps2_rx_buf_count = 0;
     
-	// Устаналиваем переменные обработчика прерывания
+	// Устанавливаем переменные обработчика прерывания
 	ps2_state = ps2_state_read;
 	ps2_bitcount = 11;
 
 	// Прерывание по срезу тактового сигнала
-	GIFR = _BV(INTF0); //0x40;
-	GICR |= _BV(INT0);	// 0x40;
+	GIFR = _BV(INTF0);
+	GICR |= _BV(INT0);
 	MCUCR = (MCUCR & 0xFC) | 2;
 }
 
@@ -209,8 +209,8 @@ void ps2_init(void) {
 // Отправка байта в PS/2 порт без подтверждения
 void ps2_write(uint8_t a) {
     // Отключаем прерывание по изменению тактового сигнала PS/2
-    GIFR = _BV(INTF0); //0x40;
-    GICR &= ~_BV(INT0); //0xBF;
+    GIFR = _BV(INTF0);
+    GICR &= ~_BV(INT0);
 
     // Замыкаем тактовый сигнал PS/2 на землю
 	 PORT(PS2_CLK_PORT) &= ~_BV(PS2_CLK_PIN);
@@ -257,7 +257,6 @@ void ps2_send(uint8_t c) {
 	ps2_write(c);
 	if (ps2_recv() != 0xFA) {
 		ps2_state = ps2_state_error;
-//MSG("ERR-send");
 	}
 }
 
@@ -275,7 +274,7 @@ volatile bool rs232_reset;
 volatile bool rs232_enabled;
 
 void rs232_send(uint8_t c) {
-    // Ожиданиие, если буфер переполнен
+    // Ожидание, если буфер переполнен
     while (rs232_tx_buf_count == sizeof(rs232_tx_buf));
 
     // Выключаем прерывания, так как обработчик прерывания тоже модифицирует эти переменные
@@ -369,7 +368,7 @@ void ps2m_init() {
 	}
 	
 #if ENABLE_WHEEL
-	// Включаем колесо и побочно устаналвиаем 80 пакетов в секунду.    
+	// Включаем колесо и побочно устанавливаем 80 пакетов в секунду.    
 	ps2_send(0xF3);
 	ps2_send(0xC8);
 	ps2_send(0xF3);
@@ -386,7 +385,7 @@ void ps2m_init() {
 	ps2_send(0xE8);
 	ps2_send(0x03);
 
-	// 20 значений в сек (мышь игнорирует эту команду)
+	// Задаём количество сэмплов/сек
 	ps2_send(0xF3);
 	ps2_send(PS2_SAMPLES_PER_SEC);
 
@@ -483,7 +482,7 @@ void rs232m_init() {
 	 UBRRH = 0x03;	//0x02;
     UBRRL = 0x40;	//0xFF;
     
-    // По умолчанию включен
+    // По умолчанию включён
     //rs232_enabled = true;
 
     // Вывести приветствие
@@ -576,7 +575,7 @@ void init(void) {
     // Timer(s)/Counter(s) Interrupt(s) initialization
     TIMSK = 0; 
     
-    // Вклчюаем прерывания от таймеров 0 и 2
+    // Включаем прерывания от таймеров 0 и 2
 	 TIMSK |= _BV(TOIE0)|_BV(TOIE2);//0x41;
 
     // Analog Comparator initialization
@@ -592,6 +591,8 @@ void init(void) {
     sei();
 }
 
+static void (*jump_to_bootloader)(void) = (void*)0x1c00;
+
 //---------------------------------------------------------------------------
 
 //eeprom uint8_t eeprom_ps2m_multiplier;
@@ -599,7 +600,7 @@ void init(void) {
 void main(void) {
 	uint8_t mb1 = 0;
     
-	// Восстанавлиаем настройки	 
+	// Восстанавливаем настройки	 
 	ps2m_multiplier = eeprom_read_byte(EEPROM_OFFSET_MULTIPLIER);
 	if (ps2m_multiplier > 2) {
 		ps2m_multiplier = 1; 
@@ -625,7 +626,7 @@ void main(void) {
 		ps2m_process();
         
         
-		// Отправляем копьютеру пакет, если буфер отправки пуст, мышь включена, 
+		// Отправляем компьютеру пакет, если буфер отправки пуст, мышь включена, 
 		// изменились нажатые кнопки или положение мыши
 		if (rs232_enabled) {
 			if (ps2m_b != mb1 || ps2m_x != 0 || ps2m_y != 0 || ps2m_z != 0 || rs232_reset) {
@@ -641,10 +642,56 @@ void main(void) {
 					rs232m_send(cx, cy, cz, ps2m_b);
 					flash_led();
 			}
+		} else {
+			// если мышь отключена, то проверяем команды конфигурации с перехода на загрузчик
+			// '?' -> 'M'		команда определения типа устройства
+			// 'tsbl'			команда перехода на загрузчик
+			// иначе -> '!'
+			
+			// Если байт готов
+			if (UCSRA & _BV(RXC)) {
+				static uint8_t goto_bootloader_cnt = 0;
+				char ch = UDR;
+				switch (ch) {
+					case '?':
+						rs232_send('M');
+						goto_bootloader_cnt = 0;
+						break;
+					case 't':
+						goto_bootloader_cnt = 1;
+						break;
+					case 's':
+						if (goto_bootloader_cnt == 1) {
+							goto_bootloader_cnt++;
+						} else {
+							goto_bootloader_cnt = 0;
+						}
+						break;
+					case 'b':
+						if (goto_bootloader_cnt == 2) {
+							goto_bootloader_cnt++;
+						} else {
+							goto_bootloader_cnt = 0;
+						}
+						break;
+					case 'l':
+						if (goto_bootloader_cnt == 3) {
+							goto_bootloader_cnt = 0;
+							jump_to_bootloader();
+						} else {
+							goto_bootloader_cnt = 0;
+						}
+						break;
+					default:
+						goto_bootloader_cnt = 0;
+						rs232_send('!');
+						break;
+				}
+			}
 		}
 		
 
-		// Обработка наплатных кнопок
+		// Обработка кнопок
 		if (pressed_button != 0xFF) {
 			ps2m_multiplier = pressed_button;
 			eeprom_update_byte(EEPROM_OFFSET_MULTIPLIER, ps2m_multiplier);
