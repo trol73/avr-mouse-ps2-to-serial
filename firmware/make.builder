@@ -5,6 +5,8 @@ src = ['src/*.c']
 
 mcu = 'atmega8'
 
+asm_ext = True
+
 frequency = 16*1000000
 
 port = 'ft0'
@@ -19,3 +21,4 @@ compiler_options = ['-g2']
 
 linker_options = []
 
+bootloader_hex = '../bootloader/build/avr-bootloader.hex'
